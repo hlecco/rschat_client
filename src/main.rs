@@ -22,7 +22,7 @@ use term_size;
 ///
 /// * `client: &mut Client`: where to take credentials from
 fn login_form(client: &mut Client) -> Option<(String, String, String)> {
-    let host = Rc::new(RefCell::new(String::new()));
+    let host = Rc::new(RefCell::new(String::from(&client.host)));
     let username = Rc::new(RefCell::new(String::from(&client.username)));
     let password = Rc::new(RefCell::new(String::new()));
 
@@ -54,8 +54,6 @@ fn login_form(client: &mut Client) -> Option<(String, String, String)> {
             )
             .child(
                 LinearLayout::horizontal()
-                    .child(Button::new("Quit", move |s| { quit.clone().set(true); s.quit(); }))
-                    .child(DummyView)
                     .child(Button::new("Login", move |s: &mut Cursive| {
                         let host = host.clone();
                         host.borrow_mut().clear();
@@ -79,7 +77,9 @@ fn login_form(client: &mut Client) -> Option<(String, String, String)> {
                             .to_string()
                             );
                         s.quit();
-                    })),
+                    }))
+                    .child(DummyView)
+                    .child(Button::new("Quit", move |s| { quit.clone().set(true); s.quit(); }))
             );
 
         siv.add_layer(login_form);
@@ -131,6 +131,7 @@ fn main() {
                     Err(_) => {break;}
                 }
             }
+            client.send_message_to_ui(Message::new(MsgType::ERR, "", "thread stopped"));
             client
         });
 
@@ -186,8 +187,8 @@ fn layout_main(sender: mpsc::Sender<Message>) -> LinearLayout {
     let sender_send = sender.clone();
 
     let dialog = (Dialog::around(write)
-        .button("Quit", move |s| { s.quit(); sender_quit.send(Message::new(MsgType::LOU, "", "")).unwrap(); })
         .button("Send", move |s| send_text(s, &sender_send))
+        .button("Quit", move |_| { sender_quit.send(Message::new(MsgType::LOU, "", "")).unwrap(); })
         .with_name("msg_dialog"))
     .fixed_height(height);
 
@@ -203,8 +204,8 @@ fn send_text(s: &mut Cursive, sender: &mpsc::Sender<Message>) {
             msg
         })
         .unwrap();
-    let mut send_message = Message::new(MsgType::MSG, "", &msg);
-    sender.send(send_message);
+    let send_message = Message::new(MsgType::MSG, "", &msg);
+    sender.send(send_message).expect("Broken mpsc channel");
 }
 
 /// Creates a new entry on the text box

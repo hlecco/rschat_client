@@ -14,6 +14,8 @@ pub struct Client {
     pub host: String,
     message_receiver: mpsc::Sender<Message>,
     message_sender: mpsc::Receiver<Message>,
+    counter: u16,
+    warn_level: u8,
 }
 
 impl Client {
@@ -31,6 +33,8 @@ impl Client {
             host: String::from(""),
             message_receiver: sender,
             message_sender: receiver,
+            counter: 0,
+            warn_level: 0
         }
     }
 
@@ -88,29 +92,61 @@ impl Client {
     }
 
     /// Tries to receive a message from the interface and send it to the server
-    fn send_text_to_server(&mut self) {
+    fn send_text_to_server(&mut self) -> Result<usize> {
         if let Some(stream) = &mut self.connection {
             if let Ok(mut msg) = self.message_sender.try_recv() {
                 msg.from = String::from(&self.username);
-                stream.write(msg.to_string().as_bytes());
+                let written = stream.write(msg.to_string().as_bytes())?;
+                match &msg.msg {
+                    MsgType::ERR => return Err(Error::from(ErrorKind::ConnectionAborted)),
+                    MsgType::LOU => return Err(Error::from(ErrorKind::ConnectionAborted)),
+                    _ => return Ok(written)
+                }
             }
+        }
+        Ok(0)
+    }
+
+    /// Sends any message to server
+    fn send_message_to_server(&mut self, msg: Message) -> Result<usize> {
+        match &mut self.connection {
+            Some(stream) => stream.write(msg.to_string().as_bytes()),
+            None => Ok(0)
         }
     }
 
+    /// Sends some message to the user interface
+    pub fn send_message_to_ui(&mut self, msg: Message) {
+        self.message_receiver.send(msg).expect("mpsc channel broke");
+    }
+
+
     /// Listens to a single message from the server and sends a single mesassage from the buffer
-    pub fn listen(&mut self) -> Result<()> {
-        self.send_text_to_server();
+    pub fn listen(&mut self) -> Result<usize> {
+        if self.counter < 500 {
+            self.counter = self.counter+1;
+        }
+        else {
+            self.counter = 0;
+            self.warn_level += 1;
+            self.send_message_to_server(Message::new(MsgType::CHK, &self.username, ""))?;
+        }
+        self.send_text_to_server()?;
         if let Some(msg) = self.receive_from_server() {
             match &msg.msg {
-                MsgType::MSG => Ok({self.message_receiver.send(msg);}),
-                MsgType::CHK => Ok({}),
+                MsgType::MSG => Ok({self.message_receiver.send(msg).expect("mpsc channel failed"); 0}),
+                MsgType::CHK => self.send_message_to_server(Message::new(MsgType::ACC, &self.username, "")),
+                MsgType::ACC => Ok({self.warn_level = 0; 0}),
                 MsgType::ERR => Err(Error::from(ErrorKind::ConnectionAborted)),
                 MsgType::LOU => Err(Error::from(ErrorKind::ConnectionAborted)),
-                _ => Ok(())
+                _ => Ok(0)
             }
         }
         else {
-            Ok(())
+            match self.warn_level > 5 {
+                false => Ok(0),
+                true => Err(Error::from(ErrorKind::ConnectionAborted))
+            }
         }
     }
 }
